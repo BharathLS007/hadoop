@@ -1,0 +1,362 @@
+# For core-site.xml
+
+<configuration>
+
+<property>
+
+ <name>fs.defaultFS</name>
+
+ <value>hdfs://localhost:9000</value>
+
+</property>
+
+</configuration>
+
+# For hdfs-site.xml or https-site.xml
+
+<configuration>
+
+<property>
+
+ <name>dfs.replication</name>
+
+ <value>1</value>
+
+</property><property>
+
+ <name>dfs.namenode.name.dir</name>
+
+ <value>C:\hadoop\data\namenode</value>
+
+</property><property>
+
+ <name>dfs.datanode.data.dir</name>
+
+ <value>C:\hadoop\data\datanode</value>
+
+</property>
+
+</configuration>
+
+# For mapred-site.xml
+
+<configuration>
+
+<property>
+
+ <name>mapreduce.framework.name</name>
+
+ <value>yarn</value>
+
+</property>
+
+</configuration>
+
+# For yarn-site.xml
+
+<configuration>
+
+<property>
+
+ <name>yarn.nodemanager.aux-services</name>
+
+ <value>mapreduce_shuffle</value>
+
+</property><property>
+
+ <name>yarn.nodemanager.auxservices.mapreduce.shuffle.class</name>
+
+ <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+
+</property>
+
+</configuration>
+
+
+
+Map.java
+
+package matrix;
+
+import org.apache.hadoop.conf.*;
+
+import org.apache.hadoop.io.LongWritable;
+
+import org.apache.hadoop.io.Text;
+
+//import org.apache.hadoop.mapreduce.Mapper;
+
+import java.io.IOException;
+
+public class Map extends org.apache.hadoop.mapreduce.Mapper<LongWritable, Text, Text, 
+
+Text>
+
+{
+
+@Override
+
+public void map(LongWritable key, Text value, Context context)
+
+throws IOException, InterruptedException {
+
+Configuration conf = context.getConfiguration();
+
+int m = Integer.parseInt(conf.get("m"));
+
+int p = Integer.parseInt(conf.get("p"));
+
+String line = value.toString();
+
+// (M, i, j, Mij);
+
+String[] indicesAndValue = line.split(",");
+
+Text outputKey = new Text();
+
+Text outputValue = new Text();
+
+if (indicesAndValue[0].equals("M")) {
+
+for (int k = 0; k < p; k++) {
+
+outputKey.set(indicesAndValue[1] + "," + k);
+
+// outputKey.set(i,k);
+
+outputValue.set(indicesAndValue[0] + "," + indicesAndValue[2]
+
++ "," + indicesAndValue[3]);
+
+// outputValue.set(M,j,Mij);
+
+context.write(outputKey, outputValue);
+
+}
+
+} else {
+
+// (N, j, k, Njk);
+
+for (int i = 0; i < m; i++) {
+
+outputKey.set(i + "," + indicesAndValue[2]); outputValue.set("N," + 
+
+indicesAndValue[1] + ","
+
++ indicesAndValue[3]); context.write(outputKey, outputValue);
+
+}
+
+}
+
+}
+
+}
+
+MatrixMultiply.java
+
+package matrix;
+
+import org.apache.hadoop.conf.*;
+
+import org.apache.hadoop.fs.Path;
+
+import org.apache.hadoop.io.*;
+
+import org.apache.hadoop.mapreduce.*;
+
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat; 
+
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat; 
+
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat; 
+
+public class MatrixMultiply {
+
+public static void main(String[] args) throws Exception { if (args.length != 2) {
+
+System.err.println("Usage: MatrixMultiply <in_dir> <out_dir>"); 
+
+System.exit(2);
+
+}
+
+Configuration conf = new Configuration();
+
+conf.set("m", "1000");
+
+conf.set("n", "100");
+
+conf.set("p", "1000");
+
+@SuppressWarnings("deprecation")
+
+Job job = new Job(conf, "MatrixMultiply"); 
+
+job.setJarByClass(MatrixMultiply.class); 
+
+job.setOutputKeyClass(Text.class); 
+
+job.setOutputValueClass(Text.class); 
+
+job.setMapperClass(Map.class);
+
+job.setReducerClass(Reduce.class); 
+
+job.setInputFormatClass(TextInputFormat.class);
+
+job.setOutputFormatClass(TextOutputFormat.class); 
+
+FileInputFormat.addInputPath(job, new Path(args[0]));
+
+FileOutputFormat.setOutputPath(job, new Path(args[1])); 
+
+job.waitForCompletion(true);
+
+}
+
+}
+
+Reduce.java
+
+package matrix;
+
+import org.apache.hadoop.io.Text;
+
+// import org.apache.hadoop.mapreduce.Reducer;
+
+import java.io.IOException;
+
+import java.util.HashMap;
+
+public class Reduce
+
+extends org.apache.hadoop.mapreduce.Reducer<Text, Text, Text, Text> { @Override
+
+public void reduce(Text key, Iterable<Text> values, Context context)
+
+throws IOException, InterruptedException {
+
+String[] value;
+
+
+
+//key=(i,k),
+
+//Values = [(M/N,j,V/W),..]
+
+HashMap<Integer, Float> hashA = new HashMap<Integer, Float>(); HashMap<Integer, 
+
+Float> hashB = new HashMap<Integer, Float>(); for (Text val : values) {
+
+value = val.toString().split(",");
+
+if (value[0].equals("M")) {
+
+hashA.put(Integer.parseInt(value[1]), Float.parseFloat(value[2])); } else {
+
+hashB.put(Integer.parseInt(value[1]), Float.parseFloat(value[2]));
+
+}
+
+}
+
+int n = Integer.parseInt(context.getConfiguration().get("n"));
+
+float result = 0.0f;
+
+float m_ij;
+
+float n_jk;
+
+for (int j = 0; j < n; j++) {
+
+m_ij = hashA.containsKey(j) ? hashA.get(j) : 0.0f; n_jk = hashB.containsKey(j) ? 
+
+hashB.get(j) : 0.0f; result += m_ij * n_jk;
+
+}
+
+if (result != 0.0f) {
+
+context.write(null,
+
+new Text(key.toString() + "," + Float.toString(result)));
+
+}
+
+}
+
+}
+
+///////habse/////////
+
+
+
+set JAVA_HOME=%JAVA_HOME%
+
+• set HBASE_CLASSPATH=%HBASE_HOME%\lib\client-facing-thirdparty\*
+
+• set HBASE_HEAPSIZE=8000
+
+• set HBASE_OPTS="-XX:+UseConcMarkSweepGC" "-
+
+Djava.net.preferIPv4Stack=true"
+
+• set SERVER_GC_OPTS="-verbose:gc" "-XX:+PrintGCDetails" "-
+
+XX:+PrintGCDateStamps" %HBASE_GC_OPTS%
+
+• set HBASE_USE_GC_LOGFILE=true
+
+• set HBASE_JMX_BASE="-Dcom.sun.management.jmxremote.ssl=false" "-
+
+Dcom.sun.management.jmxremote.authenticate=false"
+
+• set HBASE_MASTER_OPTS=%HBASE_JMX_BASE% "-
+
+Dcom.sun.management.jmxremote.port=10101"
+
+• set HBASE_REGIONSERVER_OPTS=%HBASE_JMX_BASE% "-
+
+Dcom.sun.management.jmxremote.port=10102"
+
+• set HBASE_THRIFT_OPTS=%HBASE_JMX_BASE% "-
+
+Dcom.sun.management.jmxremote.port=10103"
+
+• set HBASE_ZOOKEEPER_OPTS=%HBASE_JMX_BASE% -
+
+Dcom.sun.management.jmxremote.port=10104"
+
+• set HBASE_REGIONSERVERS=%HBASE_HOME%\conf\regionservers
+
+<property>
+
+ <name>hbase.rootdir</name>
+
+ <value>C:/hbase-2.2.5/hbase</value>
+
+</property>
+
+<property>
+
+ <name>hbase.zookeeper.property.dataDir</name>
+
+ <value>C:/hbase-2.2.5/zookeeper</value>
+
+</property>
+
+<property>
+
+ <name> hbase.zookeeper.quorum</name>
+
+ <value>localhost</value>
+
+</property>
+
+
+
